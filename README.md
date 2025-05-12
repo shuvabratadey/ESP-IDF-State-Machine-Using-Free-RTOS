@@ -1,6 +1,4 @@
-# ESP-IDF-Free-RTOS
-
-## What is Free RTOS ?
+# What is Free RTOS ?
 
 FreeRTOS is an open-source real-time operating system (RTOS) designed for embedded systems. It is known for its small footprint, portability, and scalability, making it a popular choice for a wide range of microcontroller-based applications. Here are some key aspects of FreeRTOS:
 
