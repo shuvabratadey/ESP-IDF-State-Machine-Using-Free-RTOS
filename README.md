@@ -26,6 +26,8 @@ Overall, FreeRTOS is a powerful and widely used open-source RTOS that continues 
 #include "sdkconfig.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/queue.h"
+#include "freertos/timers.h"
 #include "esp_system.h"
 #include "esp_spi_flash.h"
 ```
@@ -150,6 +152,91 @@ void app_main()
  obj->Member1 = 5;
  obj->Member2 = 'S';
  xTaskCreate(vPrintFunction, "myTask", 2048, (void *) obj, 1, NULL);
+}
+```
+
+### RTOS Queue (Queue Producer/Consumer Example)
+
+``` c
+#define QUEUE_SIZE 5
+
+QueueHandle_t myQueue;
+
+void ProducerTask(void *arg)
+{
+    int count = 0;
+    while (1)
+    {
+        if (xQueueSend(myQueue, &count, pdMS_TO_TICKS(100)) == pdTRUE)
+        {
+            printf("Produced: %d\n", count);
+            count++;
+        }
+        else
+        {
+            printf("Queue Full!\n");
+        }
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+}
+
+void ConsumerTask(void *arg)
+{
+    int rxValue;
+    while (1)
+    {
+        if (xQueueReceive(myQueue, &rxValue, portMAX_DELAY))
+        {
+            printf("Consumed: %d\n", rxValue);
+        }
+    }
+}
+
+void app_main(void)
+{
+    myQueue = xQueueCreate(QUEUE_SIZE, sizeof(int));
+
+    if (myQueue != NULL)
+    {
+        xTaskCreate(ProducerTask, "ProducerTask", 2048, NULL, 1, NULL);
+        xTaskCreate(ConsumerTask, "ConsumerTask", 2048, NULL, 1, NULL);
+    }
+    else
+    {
+        printf("Failed to create queue.\n");
+    }
+}
+
+```
+
+### RTOS Software Timer
+
+``` c
+TimerHandle_t myTimer;
+
+void TimerCallback(TimerHandle_t xTimer)
+{
+    static int counter = 0;
+    printf("Timer Callback executed! Counter = %d\n", counter++);
+}
+
+void app_main(void)
+{
+    myTimer = xTimerCreate("MyTimer",                // Timer name
+                           pdMS_TO_TICKS(2000),      // Timer period: 2 seconds
+                           pdTRUE,                   // Auto-reload (periodic)
+                           (void *)0,                // Timer ID
+                           TimerCallback);           // Callback function
+
+    if (myTimer != NULL)
+    {
+        xTimerStart(myTimer, 0);  // Start the timer immediately
+        printf("Timer started!\n");
+    }
+    else
+    {
+        printf("Failed to create timer.\n");
+    }
 }
 ```
 
