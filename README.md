@@ -86,6 +86,44 @@ void app_main(void)
 
 ```
 
+### Task Suspension & Resume
+
+``` c
+TaskHandle_t TaskAHandle = NULL;
+
+void TaskA(void *pvParameters)
+{
+    while (1)
+    {
+        printf("Task A is running!\n");
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+}
+
+void TaskB(void *pvParameters)
+{
+    while (1)
+    {
+        printf("Task B: Suspending Task A\n");
+        vTaskSuspend(TaskAHandle);
+
+        vTaskDelay(pdMS_TO_TICKS(5000));  // Wait 5 seconds
+
+        printf("Task B: Resuming Task A\n");
+        vTaskResume(TaskAHandle);
+
+        vTaskDelay(pdMS_TO_TICKS(5000));  // Repeat every 10 seconds
+    }
+}
+
+void app_main()
+{
+    xTaskCreate(TaskA, "Task A", 2048, NULL, 1, &TaskAHandle);
+    xTaskCreate(TaskB, "Task B", 2048, NULL, 2, NULL);  // Higher priority
+}
+
+```
+
 ### Task Input Parameter
 
 ```c
@@ -579,7 +617,7 @@ void app_main(void)
 }
 ```
 
-## Semaphore Code
+## RTOS Semaphore
 
 ```c
 SemaphoreHandle_t xSemaphore = NULL;
