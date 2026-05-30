@@ -329,7 +329,449 @@ Here's a general approach to implementing a state machine in FreeRTOS:
 ### Event Base State Machine
 
 ```c
+typedef enum {
+    SYS_EVT_START,
+    SYS_EVT_BOOT,
+    SYS_EVT_SWITCH,
+    SYS_EVT_STOP
+} sys_event_t;
 
+typedef enum {
+    SYS_RES_DONE,
+    SYS_RES_SKIP,
+    SYS_RES_CHANGE
+} sys_result_t;
+
+#define SYS_QUEUE_DEPTH    10
+
+typedef struct sys_context sys_context_t;
+
+typedef sys_result_t (*sys_state_cb_t)(sys_context_t *ctx, sys_event_t evt);
+
+struct sys_context {
+    sys_state_cb_t current;
+    sys_state_cb_t pending;
+};
+
+static QueueHandle_t sSysQueue;
+static sys_context_t sMachine;
+
+/* Forward Declarations */
+static void SysPushEvent(sys_event_t evt);
+static void SysEngineTask(void *arg);
+
+static sys_result_t StateAlpha(sys_context_t *ctx, sys_event_t evt);
+static sys_result_t StateBeta(sys_context_t *ctx, sys_event_t evt);
+
+/*-----------------------------------------------------------*/
+
+static sys_result_t StateAlpha(sys_context_t *ctx, sys_event_t evt)
+{
+    switch (evt)
+    {
+        case SYS_EVT_START:
+            ESP_LOGI("FSM", "Alpha : Enter");
+            SysPushEvent(SYS_EVT_BOOT);
+            return SYS_RES_DONE;
+
+        case SYS_EVT_BOOT:
+            ESP_LOGI("FSM", "Alpha : Boot");
+            SysPushEvent(SYS_EVT_SWITCH);
+            return SYS_RES_DONE;
+
+        case SYS_EVT_SWITCH:
+            ESP_LOGI("FSM", "Alpha : Switch");
+            ctx->pending = StateBeta;
+            return SYS_RES_CHANGE;
+
+        case SYS_EVT_STOP:
+            ESP_LOGI("FSM", "Alpha : Exit");
+            return SYS_RES_DONE;
+
+        default:
+            ESP_LOGW("FSM", "Alpha : Event Ignored (%d)", evt);
+            return SYS_RES_SKIP;
+    }
+}
+
+/*-----------------------------------------------------------*/
+
+static sys_result_t StateBeta(sys_context_t *ctx, sys_event_t evt)
+{
+    switch (evt)
+    {
+        case SYS_EVT_START:
+            ESP_LOGW("FSM", "Beta : Enter");
+            SysPushEvent(SYS_EVT_BOOT);
+            return SYS_RES_DONE;
+
+        case SYS_EVT_BOOT:
+            ESP_LOGW("FSM", "Beta : Boot");
+            SysPushEvent(SYS_EVT_SWITCH);
+            return SYS_RES_DONE;
+
+        case SYS_EVT_SWITCH:
+            ESP_LOGW("FSM", "Beta : Switch");
+            ctx->pending = StateAlpha;
+            return SYS_RES_CHANGE;
+
+        case SYS_EVT_STOP:
+            ESP_LOGW("FSM", "Beta : Exit");
+            return SYS_RES_DONE;
+
+        default:
+            ESP_LOGW("FSM", "Beta : Event Ignored (%d)", evt);
+            return SYS_RES_SKIP;
+    }
+}
+
+/*-----------------------------------------------------------*/
+
+static void SysPushEvent(sys_event_t evt)
+{
+    if (xQueueSend(sSysQueue, &evt, pdMS_TO_TICKS(100)) != pdPASS)
+    {
+        ESP_LOGE("FSM", "Queue Send Failed");
+    }
+}
+
+/*-----------------------------------------------------------*/
+
+static void SysEngineTask(void *arg)
+{
+    sys_event_t evt;
+    sys_result_t result;
+
+    while (true)
+    {
+        if (xQueueReceive(sSysQueue, &evt, portMAX_DELAY) == pdTRUE)
+        {
+            result = sMachine.current(&sMachine, evt);
+
+            if (result == SYS_RES_CHANGE)
+            {
+                sMachine.current(&sMachine, SYS_EVT_STOP);
+
+                if (sMachine.pending)
+                {
+                    sMachine.current = sMachine.pending;
+                    sMachine.pending = NULL;
+
+                    sMachine.current(&sMachine, SYS_EVT_START);
+                }
+                else
+                {
+                    ESP_LOGE("FSM", "Pending state is NULL");
+                }
+            }
+        }
+    }
+}
+
+/*-----------------------------------------------------------*/
+
+void app_main(void)
+{
+    sSysQueue = xQueueCreate(SYS_QUEUE_DEPTH, sizeof(sys_event_t));
+
+    sMachine.current = StateAlpha;
+    sMachine.pending = NULL;
+
+    sMachine.current(&sMachine, SYS_EVT_START);
+
+    xTaskCreate(
+        SysEngineTask,
+        "SysEngine",
+        2048,
+        NULL,
+        2,
+        NULL);
+}
+```
+
+### Event Parameter Base State Machine
+
+```c
+typedef enum {
+    SYS_EVT_START,
+    SYS_EVT_CONFIGURE,
+    SYS_EVT_ADVANCE,
+    SYS_EVT_STOP
+} sys_evt_t;
+
+typedef struct {
+    sys_evt_t id;
+
+    union {
+        struct {
+            uint8_t valueA;
+            uint16_t valueB;
+        } cfgData;
+
+        struct {
+            char *text;
+            uint16_t code;
+        } msgData;
+    };
+} sys_msg_t;
+
+typedef enum {
+    SYS_RESULT_OK,
+    SYS_RESULT_IGNORE,
+    SYS_RESULT_SWITCH
+} sys_result_t;
+
+#define SYS_QUEUE_LENGTH    10
+
+typedef struct sys_fsm sys_fsm_t;
+
+typedef sys_result_t (*sys_state_fn_t)(sys_fsm_t *fsm,
+                                       sys_msg_t *msg);
+
+struct sys_fsm {
+    sys_state_fn_t currentState;
+    sys_state_fn_t targetState;
+};
+
+static QueueHandle_t sQueueHandle;
+static sys_fsm_t sFsm;
+
+/*-------------------------------------------------------*/
+/* Forward declarations                                  */
+/*-------------------------------------------------------*/
+
+static void QueueEvent(sys_msg_t *msg);
+static void FsmTask(void *arg);
+
+static sys_result_t ModePrimary(sys_fsm_t *fsm,
+                                sys_msg_t *msg);
+
+static sys_result_t ModeSecondary(sys_fsm_t *fsm,
+                                  sys_msg_t *msg);
+
+/*-------------------------------------------------------*/
+/* Primary State                                         */
+/*-------------------------------------------------------*/
+
+static sys_result_t ModePrimary(sys_fsm_t *fsm,
+                                sys_msg_t *msg)
+{
+    sys_msg_t txMsg;
+
+    switch (msg->id)
+    {
+        case SYS_EVT_START:
+
+            ESP_LOGI("FSM", "Primary Enter (sending cfg payload)");
+
+            txMsg.id = SYS_EVT_CONFIGURE;
+            txMsg.cfgData.valueA = 0x10;
+            txMsg.cfgData.valueB = 0x6F85;
+
+            QueueEvent(&txMsg);
+
+            return SYS_RESULT_OK;
+
+        case SYS_EVT_CONFIGURE:
+
+            ESP_LOGI("FSM",
+                     "Primary Configure (A=0x%X B=0x%X)",
+                     msg->cfgData.valueA,
+                     msg->cfgData.valueB);
+
+            txMsg.id = SYS_EVT_ADVANCE;
+            QueueEvent(&txMsg);
+
+            return SYS_RESULT_OK;
+
+        case SYS_EVT_ADVANCE:
+
+            ESP_LOGI("FSM", "Primary Advance");
+
+            fsm->targetState = ModeSecondary;
+
+            return SYS_RESULT_SWITCH;
+
+        case SYS_EVT_STOP:
+
+            ESP_LOGI("FSM", "Primary Exit");
+
+            return SYS_RESULT_OK;
+
+        default:
+
+            ESP_LOGW("FSM",
+                     "Primary ignored event %d",
+                     msg->id);
+
+            return SYS_RESULT_IGNORE;
+    }
+}
+
+/*-------------------------------------------------------*/
+/* Secondary State                                       */
+/*-------------------------------------------------------*/
+
+static sys_result_t ModeSecondary(sys_fsm_t *fsm,
+                                  sys_msg_t *msg)
+{
+    sys_msg_t txMsg;
+
+    switch (msg->id)
+    {
+        case SYS_EVT_START:
+
+            ESP_LOGW("FSM", "Secondary Enter (sending string payload)");
+
+            txMsg.id = SYS_EVT_CONFIGURE;
+
+            txMsg.msgData.text = malloc(32);
+
+            if (txMsg.msgData.text != NULL)
+            {
+                memset(txMsg.msgData.text, 0, 32);
+                strcpy(txMsg.msgData.text,
+                       "Shuva is good");
+            }
+
+            txMsg.msgData.code = 0x2048;
+
+            QueueEvent(&txMsg);
+
+            return SYS_RESULT_OK;
+
+        case SYS_EVT_CONFIGURE:
+
+            ESP_LOGW("FSM",
+                     "Secondary Configure (text=%s code=0x%X)",
+                     msg->msgData.text,
+                     msg->msgData.code);
+
+            if (msg->msgData.text)
+            {
+                free(msg->msgData.text);
+                msg->msgData.text = NULL;
+            }
+
+            txMsg.id = SYS_EVT_ADVANCE;
+            QueueEvent(&txMsg);
+
+            return SYS_RESULT_OK;
+
+        case SYS_EVT_ADVANCE:
+
+            ESP_LOGW("FSM", "Secondary Advance");
+
+            fsm->targetState = ModePrimary;
+
+            return SYS_RESULT_SWITCH;
+
+        case SYS_EVT_STOP:
+
+            ESP_LOGW("FSM", "Secondary Exit");
+
+            return SYS_RESULT_OK;
+
+        default:
+
+            ESP_LOGW("FSM",
+                     "Secondary ignored event %d",
+                     msg->id);
+
+            return SYS_RESULT_IGNORE;
+    }
+}
+
+/*-------------------------------------------------------*/
+/* Queue helper                                          */
+/*-------------------------------------------------------*/
+
+static void QueueEvent(sys_msg_t *msg)
+{
+    if (xQueueSend(sQueueHandle,
+                   msg,
+                   pdMS_TO_TICKS(100)) != pdPASS)
+    {
+        ESP_LOGE("FSM",
+                 "Queue send failed");
+    }
+}
+
+/*-------------------------------------------------------*/
+/* FSM dispatcher                                        */
+/*-------------------------------------------------------*/
+
+static void FsmTask(void *arg)
+{
+    sys_msg_t msg;
+    sys_result_t result;
+
+    while (1)
+    {
+        if (xQueueReceive(sQueueHandle,
+                          &msg,
+                          portMAX_DELAY) == pdTRUE)
+        {
+            result = sFsm.currentState(&sFsm,
+                                       &msg);
+
+            if (result == SYS_RESULT_SWITCH)
+            {
+                msg.id = SYS_EVT_STOP;
+
+                sFsm.currentState(&sFsm,
+                                  &msg);
+
+                if (sFsm.targetState != NULL)
+                {
+                    sFsm.currentState =
+                        sFsm.targetState;
+
+                    sFsm.targetState = NULL;
+
+                    msg.id = SYS_EVT_START;
+
+                    sFsm.currentState(&sFsm,
+                                      &msg);
+                }
+                else
+                {
+                    ESP_LOGE("FSM",
+                             "Requested state switch with NULL target");
+                }
+            }
+        }
+    }
+}
+
+/*-------------------------------------------------------*/
+/* Application Entry                                     */
+/*-------------------------------------------------------*/
+
+void app_main(void)
+{
+    sys_msg_t startupMsg;
+
+    sQueueHandle = xQueueCreate(
+        SYS_QUEUE_LENGTH,
+        sizeof(sys_msg_t));
+
+    sFsm.currentState = ModePrimary;
+    sFsm.targetState = NULL;
+
+    startupMsg.id = SYS_EVT_START;
+
+    sFsm.currentState(&sFsm,
+                      &startupMsg);
+
+    xTaskCreate(
+        FsmTask,
+        "FsmEngine",
+        2048,
+        NULL,
+        2,
+        NULL);
+}
 ```
 
 This are some basic example of state machines and the actual implementation may vary depending on the complexity of your system and specific requirements. The key idea is to leverage FreeRTOS tasks and synchronization mechanisms to create a well-organized and efficient state machine for your embedded application.
