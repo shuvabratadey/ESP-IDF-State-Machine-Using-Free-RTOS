@@ -400,7 +400,7 @@ In FreeRTOS, as with any real-time operating system (RTOS), a state machine is a
 Here's a general approach to implementing a state machine in FreeRTOS:
 <h2>Event Base State Machine</h2>
 <pre><code>
-	typedef enum {
+typedef enum {
     SYS_EVT_START,
     SYS_EVT_BOOT,
     SYS_EVT_SWITCH,
@@ -561,8 +561,8 @@ void app_main(void)
 </code></pre>
 
 <h2>Event Parameter Base State Machine</h2>
-<pre><code>
-	typedef enum {
+<pre><code>	
+typedef enum {
     SYS_EVT_START,
     SYS_EVT_CONFIGURE,
     SYS_EVT_ADVANCE,
